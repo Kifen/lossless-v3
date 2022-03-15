@@ -4,6 +4,7 @@
 /* eslint-disable prefer-destructuring */
 const { time, constants } = require('@openzeppelin/test-helpers');
 const { expect } = require('chai');
+const { ContractFunction } = require('hardhat/internal/hardhat-network/stack-traces/model');
 const path = require('path');
 const { setupAddresses, setupEnvironment, setupToken } = require('../utils');
 
@@ -37,6 +38,15 @@ describe(scriptName, () => {
       Number(time.duration.days(1)),
       env.lssController.address);
 
+      anonToken = await setupToken(2000000,
+        'Anon Token',
+        'REPORT',
+        adr.lerc20InitialHolder,
+        adr.regularUser5.address,
+        adr.lerc20BackupAdmin.address,
+        Number(time.duration.days(1)),
+        env.lssController.address);
+
     await env.lssController.connect(adr.lssAdmin).setWhitelist([env.lssReporting.address], true);
     await env.lssController.connect(adr.lssAdmin).setDexList([adr.dexAddress.address], true);
 
@@ -61,19 +71,27 @@ describe(scriptName, () => {
       .report(lerc20Token.address, adr.maliciousActor1.address);
     await env.lssReporting.connect(adr.reporter1)
       .report(lerc20Token.address, reportedToken.address);
+
   });
 
   describe('when everyone votes negatively', () => {
     beforeEach(async () => {
-      await env.lssGovernance.connect(adr.lssAdmin).losslessVote(1, false);
-      await env.lssGovernance.connect(adr.lerc20Admin).tokenOwnersVote(1, false);
-      await env.lssGovernance.connect(adr.member1).committeeMemberVote(1, false);
-      await env.lssGovernance.connect(adr.member2).committeeMemberVote(1, false);
-      await env.lssGovernance.connect(adr.member3).committeeMemberVote(1, false);
-      await env.lssGovernance.connect(adr.member4).committeeMemberVote(1, false);
+      await Promise.all([
+        vote(1),
+        vote(2)
+      ])
     });
 
-    it('should let reported address retrieve compensation', async () => {
+    const vote = async (reportId) => {
+      await env.lssGovernance.connect(adr.lssAdmin).losslessVote(reportId, false);
+      await env.lssGovernance.connect(adr.lerc20Admin).tokenOwnersVote(reportId, false);
+      await env.lssGovernance.connect(adr.member1).committeeMemberVote(reportId, false);
+      await env.lssGovernance.connect(adr.member2).committeeMemberVote(reportId, false);
+      await env.lssGovernance.connect(adr.member3).committeeMemberVote(reportId, false);
+      await env.lssGovernance.connect(adr.member4).committeeMemberVote(reportId, false);
+    }
+
+    const resolveReport = async (id) => {
       await ethers.provider.send('evm_increaseTime', [
         Number(time.duration.minutes(5)),
       ]);
@@ -100,16 +118,19 @@ describe(scriptName, () => {
       await env.lssStaking.connect(adr.staker2).stake(1);
       await env.lssStaking.connect(adr.staker3).stake(1);
 
-      await env.lssGovernance.connect(adr.lssAdmin).resolveReport(1);
+      await env.lssGovernance.connect(adr.lssAdmin).resolveReport(id);
 
       expect(
-        await env.lssGovernance.isReportSolved(1),
+        await env.lssGovernance.isReportSolved(id),
       ).to.be.equal(true);
 
       expect(
-        await env.lssGovernance.reportResolution(1),
+        await env.lssGovernance.reportResolution(id),
       ).to.be.equal(false);
+    }
 
+    it('should let reported address retrieve compensation', async () => {
+      await resolveReport(1)
       await expect(
         env.lssGovernance.connect(adr.maliciousActor1).retrieveCompensation(),
       ).to.emit(env.lssGovernance, 'CompensationRetrieval').withArgs(
@@ -121,6 +142,24 @@ describe(scriptName, () => {
 
       expect(
         await env.lssToken.balanceOf(adr.maliciousActor1.address),
+      ).to.be.equal((env.reportingAmount * compensationPercentage) / 100);
+    });
+
+    it('should let reported smart contract retrieve compensation', async () => {
+      const account = reportedToken.address;
+      await resolveReport(2)
+
+      await expect(
+        env.lssGovernance.retrieveContractCompensation(account),
+      ).to.emit(env.lssGovernance, 'CompensationRetrieval').withArgs(
+        account,
+        20,
+      );
+
+      const compensationPercentage = await env.lssGovernance.compensationPercentage();
+
+      expect(
+        await env.lssToken.balanceOf(account),
       ).to.be.equal((env.reportingAmount * compensationPercentage) / 100);
     });
 
@@ -170,46 +209,20 @@ describe(scriptName, () => {
       ).to.be.revertedWith('LSS: Already retrieved');
     });
 
-    it('should revert if other than the afflicted tries to retrieve', async () => {
-      await ethers.provider.send('evm_increaseTime', [
-        Number(time.duration.minutes(5)),
-      ]);
-
-      await env.lssToken.connect(adr.lssInitialHolder)
-        .transfer(adr.staker1.address, env.stakingAmount + env.stakingAmount);
-      await env.lssToken.connect(adr.lssInitialHolder)
-        .transfer(adr.staker2.address, env.stakingAmount * 2);
-      await env.lssToken.connect(adr.lssInitialHolder)
-        .transfer(adr.staker3.address, env.stakingAmount * 2);
-
-      await env.lssToken.connect(adr.staker1)
-        .approve(env.lssStaking.address, env.stakingAmount * 2);
-      await env.lssToken.connect(adr.staker2)
-        .approve(env.lssStaking.address, env.stakingAmount * 2);
-      await env.lssToken.connect(adr.staker3)
-        .approve(env.lssStaking.address, env.stakingAmount * 2);
-
-      await ethers.provider.send('evm_increaseTime', [
-        Number(time.duration.minutes(5)),
-      ]);
-
-      await env.lssStaking.connect(adr.staker1).stake(1);
-      await env.lssStaking.connect(adr.staker2).stake(1);
-      await env.lssStaking.connect(adr.staker3).stake(1);
-
-      await env.lssGovernance.connect(adr.lssAdmin).resolveReport(1);
-
-      expect(
-        await env.lssGovernance.isReportSolved(1),
-      ).to.be.equal(true);
-
-      expect(
-        await env.lssGovernance.reportResolution(1),
-      ).to.be.equal(false);
+    it('should revert if other than the afflicted contract account tries to retrieve', async () => {
+      await resolveReport(2)
 
       await expect(
-        env.lssGovernance.connect(adr.regularUser1).retrieveCompensation(),
+        env.lssGovernance.retrieveContractCompensation(anonToken.address),
       ).to.be.revertedWith('LSS: No retribution assigned');
+    });
+
+    it('should revert if E.O.A tries to retieve a contract account compensation', async () => {
+      await resolveReport(2)
+
+      await expect(
+        env.lssGovernance.retrieveContractCompensation(adr.regularUser1.address),
+      ).to.be.revertedWith('LSS: not contract account');
     });
 
     it('should revert if called by other than the governance contract', async () => {

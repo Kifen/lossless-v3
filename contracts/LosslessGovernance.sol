@@ -95,16 +95,6 @@ contract LosslessGovernance is ILssGovernance, Initializable, AccessControlUpgra
         _;
     }
 
-    modifier alreadyRetrieved(address _account) {
-       require(!compensation[_account].payed, "LSS: Already retrieved");
-       _;
-    }
-
-    modifier nullRetribution(address _account) {
-      require(compensation[_account].amount != 0, "LSS: No retribution assigned");
-      _;
-    }
-
     // --- ADMINISTRATION ---
 
     function pause() public onlyLosslessPauseAdmin  {
@@ -545,23 +535,30 @@ contract LosslessGovernance is ILssGovernance, Initializable, AccessControlUpgra
     }
 
     /// @notice This lets an erroneously reported E.O.A account to retrieve compensation
-    function retrieveCompensation() override public whenNotPaused alreadyRetrieved(msg.sender) nullRetribution(msg.sender) {
+    function retrieveCompensation() override public whenNotPaused {
       _retrieveCompensation(msg.sender);
     }
 
     /// @notice This lets an erroneously reported smart contract to retrieve compensation
-    function retrieveCompensation(address _account) override public whenNotPaused alreadyRetrieved(_account) nullRetribution(_account) {
+    function retrieveContractCompensation(address _account) override public whenNotPaused  {
+      require(isContract(_account), "LSS: not contract account");
       _retrieveCompensation(_account);
     }
 
     function _retrieveCompensation(address _account) internal {
-       compensation[_account].payed = true;
+      require(!alreadyRetrieved(_account), "LSS: Already retrieved");
+      
+      Compensation memory compensation_ = compensation[_account];
+      require(compensation_.amount != 0, "LSS: No retribution assigned");
 
-        losslessReporting.retrieveCompensation(_account, compensation[msg.sender].amount);
+      require(compensation_.amount > 0 && compensation_.payed == false, "LSS: no compensation");
 
-        emit CompensationRetrieval(msg.sender, compensation[_account].amount);
+      compensation[_account].payed = true;
+      losslessReporting.retrieveCompensation(_account, compensation[_account].amount);
 
-        compensation[_account].amount = 0;
+      emit CompensationRetrieval(_account, compensation[_account].amount);
+
+      compensation[_account].amount = 0;
     }
 
     ///@notice This function verifies is an address belongs to a contract
@@ -618,4 +615,7 @@ contract LosslessGovernance is ILssGovernance, Initializable, AccessControlUpgra
         emit LosslessClaim(reportTokens, _reportId, amountToClaim);
     }
 
+    function alreadyRetrieved(address _account) private returns (bool) {
+      return compensation[_account].payed;
+    }
 }

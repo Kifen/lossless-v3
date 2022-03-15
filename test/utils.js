@@ -222,7 +222,7 @@ const setupEnvironment = async (
     stakingAmount,
     reportingAmount,
     reportLifetime,
-    lssToken,
+    lssToken
   };
 };
 
