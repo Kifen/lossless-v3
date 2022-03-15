@@ -95,6 +95,16 @@ contract LosslessGovernance is ILssGovernance, Initializable, AccessControlUpgra
         _;
     }
 
+    modifier alreadyRetrieved(address _account) {
+       require(!compensation[_account].payed, "LSS: Already retrieved");
+       _;
+    }
+
+    modifier nullRetribution(address _account) {
+      require(compensation[_account].amount != 0, "LSS: No retribution assigned");
+      _;
+    }
+
     // --- ADMINISTRATION ---
 
     function pause() public onlyLosslessPauseAdmin  {
@@ -534,19 +544,24 @@ contract LosslessGovernance is ILssGovernance, Initializable, AccessControlUpgra
         return false;
     }
 
-    /// @notice This lets an erroneously reported account to retrieve compensation
-    function retrieveCompensation() override public whenNotPaused {
-        require(!compensation[msg.sender].payed, "LSS: Already retrieved");
-        require(compensation[msg.sender].amount != 0, "LSS: No retribution assigned");
-        
-        compensation[msg.sender].payed = true;
+    /// @notice This lets an erroneously reported E.O.A account to retrieve compensation
+    function retrieveCompensation() override public whenNotPaused alreadyRetrieved(msg.sender) nullRetribution(msg.sender) {
+      _retrieveCompensation(msg.sender);
+    }
 
-        losslessReporting.retrieveCompensation(msg.sender, compensation[msg.sender].amount);
+    /// @notice This lets an erroneously reported smart contract to retrieve compensation
+    function retrieveCompensation(address _account) override public whenNotPaused alreadyRetrieved(_account) nullRetribution(_account) {
+      _retrieveCompensation(_account);
+    }
 
-        emit CompensationRetrieval(msg.sender, compensation[msg.sender].amount);
+    function _retrieveCompensation(address _account) internal {
+       compensation[_account].payed = true;
 
-        compensation[msg.sender].amount = 0;
+        losslessReporting.retrieveCompensation(_account, compensation[msg.sender].amount);
 
+        emit CompensationRetrieval(msg.sender, compensation[_account].amount);
+
+        compensation[_account].amount = 0;
     }
 
     ///@notice This function verifies is an address belongs to a contract
